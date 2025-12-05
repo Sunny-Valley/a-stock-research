@@ -1,0 +1,5 @@
+akshare
+pandas
+scikit-learn
+psycopg2-binary
+pyqlib
