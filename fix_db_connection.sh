@@ -1,3 +1,10 @@
+#!/bin/bash
+
+echo "🔌 开始修改 API 以适配直连模式 (Direct Connection)..."
+
+# 重写 app/api/watchlist/route.js
+# 使用 createClient() 替代 sql``，这样可以绕过连接池检查
+cat <<EOF > app/api/watchlist/route.js
 import { createClient } from '@vercel/postgres';
 import { NextResponse } from 'next/server';
 
@@ -10,14 +17,14 @@ export async function GET() {
     await client.connect();
 
     // 3. 确保表存在
-    await client.sql`CREATE TABLE IF NOT EXISTS watchlist (
+    await client.sql\`CREATE TABLE IF NOT EXISTS watchlist (
       code VARCHAR(10) PRIMARY KEY,
       name VARCHAR(50),
       added_at TIMESTAMP DEFAULT NOW()
-    );`;
+    );\`;
     
     // 4. 查询数据
-    const { rows } = await client.sql`SELECT * FROM watchlist ORDER BY added_at DESC`;
+    const { rows } = await client.sql\`SELECT * FROM watchlist ORDER BY added_at DESC\`;
     
     return NextResponse.json({ data: rows });
   } catch (error) {
@@ -38,13 +45,13 @@ export async function POST(request) {
     await client.connect();
 
     if (action === 'add') {
-      await client.sql`INSERT INTO watchlist (code, name) VALUES (${code}, ${name}) 
-                       ON CONFLICT (code) DO NOTHING`;
+      await client.sql\`INSERT INTO watchlist (code, name) VALUES (\${code}, \${name}) 
+                       ON CONFLICT (code) DO NOTHING\`;
     } else if (action === 'remove') {
-      await client.sql`DELETE FROM watchlist WHERE code = ${code}`;
+      await client.sql\`DELETE FROM watchlist WHERE code = \${code}\`;
     }
     
-    const { rows } = await client.sql`SELECT * FROM watchlist ORDER BY added_at DESC`;
+    const { rows } = await client.sql\`SELECT * FROM watchlist ORDER BY added_at DESC\`;
     return NextResponse.json({ data: rows });
   } catch (error) {
     console.error("DB Write Error:", error);
@@ -53,3 +60,11 @@ export async function POST(request) {
     if (client) await client.end();
   }
 }
+EOF
+
+echo "✅ 代码已修改为兼容模式！"
+echo "正在提交更新..."
+
+git add .
+git commit -m "Fix: Switch to createClient for direct DB connection"
+git push origin main
