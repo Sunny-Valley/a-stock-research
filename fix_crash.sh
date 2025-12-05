@@ -1,3 +1,9 @@
+#!/bin/bash
+
+echo "🚑 开始应用防崩溃补丁..."
+
+# 重写 app/page.js，增加对 API 数据的安全检查
+cat <<EOF > app/page.js
 "use client";
 
 import React, { useState, useEffect } from 'react';
@@ -104,7 +110,7 @@ export default function Home() {
     let p = basePrice * 0.9;
     for(let i=0; i<30; i++) {
         p = p * (1 + (Math.random() - 0.45) * 0.05);
-        history.push({ date: `T-${30-i}`, price: parseFloat(p.toFixed(2)), ma5: parseFloat((p*1.02).toFixed(2)) });
+        history.push({ date: \`T-\${30-i}\`, price: parseFloat(p.toFixed(2)), ma5: parseFloat((p*1.02).toFixed(2)) });
     }
     
     const aiScore = Math.floor(Math.random() * 30) + 60;
@@ -117,7 +123,7 @@ export default function Home() {
       history: history,
       aiScore: aiScore,
       analysis: aiScore > 75 ? '多头排列，量价齐升' : '震荡整理，方向未明',
-      forecast: Array.from({length: 7}, (_, i) => ({ day: `未来${i+1}天`, price: parseFloat((currentPrice*(1+(Math.random()-0.4)*0.02)).toFixed(2)) }))
+      forecast: Array.from({length: 7}, (_, i) => ({ day: \`未来\${i+1}天\`, price: parseFloat((currentPrice*(1+(Math.random()-0.4)*0.02)).toFixed(2)) }))
     });
     setLastUpdated(new Date());
   };
@@ -159,20 +165,20 @@ export default function Home() {
           <div className="relative group">
             <input 
               type="text" value={query} onChange={e => setQuery(e.target.value)}
-              onKeyDown={e => { if(e.key === 'Enter' && query) addToWatchlist(query, `自选 ${query}`); }}
+              onKeyDown={e => { if(e.key === 'Enter' && query) addToWatchlist(query, \`自选 \${query}\`); }}
               placeholder="添加代码 (回车)"
               className="w-full bg-gray-50 border border-gray-200 rounded-xl py-2.5 pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-black/5 transition-all"
             />
             <Search className="w-4 h-4 absolute left-3 top-3 text-gray-400" />
             {query && (
-              <button onClick={() => addToWatchlist(query, `自选 ${query}`)} className="absolute right-2 top-2 p-1 bg-black text-white rounded-md hover:scale-105 transition-transform"><Plus className="w-3 h-3" /></button>
+              <button onClick={() => addToWatchlist(query, \`自选 \${query}\`)} className="absolute right-2 top-2 p-1 bg-black text-white rounded-md hover:scale-105 transition-transform"><Plus className="w-3 h-3" /></button>
             )}
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {watchlist.map(stock => (
-            <div key={stock.code} onClick={() => handleSelectStock(stock)} className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all hover:bg-gray-50 ${activeStock?.code === stock.code ? 'bg-white shadow-md border border-gray-100 ring-1 ring-black/5' : ''}`}>
+            <div key={stock.code} onClick={() => handleSelectStock(stock)} className={\`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all hover:bg-gray-50 \${activeStock?.code === stock.code ? 'bg-white shadow-md border border-gray-100 ring-1 ring-black/5' : ''}\`}>
               <div><div className="font-semibold text-sm">{stock.name}</div><div className="text-xs text-gray-400 font-mono">{stock.code}</div></div>
               <button onClick={(e) => removeFromWatchlist(e, stock.code)} className="opacity-0 group-hover:opacity-100 p-2 text-gray-300 hover:text-red-500 transition-opacity"><Trash2 className="w-4 h-4" /></button>
             </div>
@@ -195,8 +201,8 @@ export default function Home() {
                 <div className="flex items-center gap-2 text-sm text-gray-500"><span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> 实时交易中 · {lastUpdated.toLocaleTimeString()} 更新 (15s/次)</div>
               </div>
               <div className="text-right">
-                <div className={`text-5xl font-bold tracking-tight ${colorClass}`}>¥{stockData.price.toFixed(2)}</div>
-                <div className={`flex items-center justify-end gap-2 text-lg font-medium ${colorClass}`}>{isPositive ? <TrendingUp className="w-5 h-5"/> : <TrendingDown className="w-5 h-5"/>}{stockData.change > 0 ? '+' : ''}{stockData.change.toFixed(2)} ({stockData.changePercent.toFixed(2)}%)</div>
+                <div className={\`text-5xl font-bold tracking-tight \${colorClass}\`}>¥{stockData.price.toFixed(2)}</div>
+                <div className={\`flex items-center justify-end gap-2 text-lg font-medium \${colorClass}\`}>{isPositive ? <TrendingUp className="w-5 h-5"/> : <TrendingDown className="w-5 h-5"/>}{stockData.change > 0 ? '+' : ''}{stockData.change.toFixed(2)} ({stockData.changePercent.toFixed(2)}%)</div>
               </div>
             </div>
 
@@ -241,3 +247,16 @@ export default function Home() {
     </div>
   );
 }
+EOF
+
+echo "✅ 修复完成！请提交代码。"
+```
+
+### 操作指南
+
+1.  在 Codespaces 终端运行：`bash fix_crash.sh`
+2.  提交代码：
+    ```bash
+    git add .
+    git commit -m "Fix: Add fallback for missing DB"
+    git push origin main
