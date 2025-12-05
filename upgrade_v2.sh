@@ -1,3 +1,201 @@
+#!/bin/bash
+
+echo "🚀 开始升级 A-Share AI 到 V2 版本 (自选股+实时刷新+数据库集成)..."
+
+# ---------------------------------------------------------
+# 1. 创建后端 API (用于前端读写数据库)
+# ---------------------------------------------------------
+echo "🔌 创建后端 API: app/api/watchlist/route.js..."
+mkdir -p app/api/watchlist
+cat <<EOF > app/api/watchlist/route.js
+import { sql } from '@vercel/postgres';
+import { NextResponse } from 'next/server';
+
+// 获取自选股列表
+export async function GET() {
+  try {
+    // 确保表存在
+    await sql\`CREATE TABLE IF NOT EXISTS watchlist (
+      code VARCHAR(10) PRIMARY KEY,
+      name VARCHAR(50),
+      added_at TIMESTAMP DEFAULT NOW()
+    );\`;
+    
+    // 获取列表
+    const { rows } = await sql\`SELECT * FROM watchlist ORDER BY added_at DESC\`;
+    return NextResponse.json({ data: rows });
+  } catch (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+// 添加/删除自选股
+export async function POST(request) {
+  try {
+    const { action, code, name } = await request.json();
+    
+    if (action === 'add') {
+      await sql\`INSERT INTO watchlist (code, name) VALUES (\${code}, \${name}) 
+                ON CONFLICT (code) DO NOTHING\`;
+    } else if (action === 'remove') {
+      await sql\`DELETE FROM watchlist WHERE code = \${code}\`;
+    }
+    
+    const { rows } = await sql\`SELECT * FROM watchlist ORDER BY added_at DESC\`;
+    return NextResponse.json({ data: rows });
+  } catch (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+EOF
+
+# ---------------------------------------------------------
+# 2. 更新 AI 核心脚本 (让 Python 从数据库读取关注列表)
+# ---------------------------------------------------------
+echo "🧠 升级 AI 脚本: scripts/run_prediction.py..."
+cat <<EOF > scripts/run_prediction.py
+import os
+import akshare as ak
+import psycopg2
+import pandas as pd
+from datetime import datetime, timedelta
+
+# 连接数据库
+def get_db_connection():
+    dsn = os.environ.get("POSTGRES_URL")
+    if not dsn: return None
+    try:
+        return psycopg2.connect(dsn)
+    except:
+        return None
+
+def fetch_watchlist(conn):
+    """从数据库获取用户关注的股票"""
+    cur = conn.cursor()
+    # 确保表存在
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS watchlist (
+            code VARCHAR(10) PRIMARY KEY,
+            name VARCHAR(50),
+            added_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    conn.commit()
+    
+    cur.execute("SELECT code, name FROM watchlist")
+    rows = cur.fetchall()
+    
+    # 如果数据库为空，返回默认列表
+    if not rows:
+        defaults = [("600519", "贵州茅台"), ("300750", "宁德时代"), ("000001", "平安银行")]
+        for code, name in defaults:
+            cur.execute("INSERT INTO watchlist (code, name) VALUES (%s, %s) ON CONFLICT DO NOTHING", (code, name))
+        conn.commit()
+        return defaults
+        
+    return rows
+
+def fetch_and_predict():
+    conn = get_db_connection()
+    if not conn:
+        print("No DB Connection")
+        return
+
+    watchlist = fetch_watchlist(conn)
+    print(f"Analyzing {len(watchlist)} stocks from Watchlist...")
+    
+    cur = conn.cursor()
+    # 确保预测表存在
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ai_predictions (
+            id SERIAL PRIMARY KEY,
+            code VARCHAR(10) NOT NULL,
+            predict_date DATE NOT NULL,
+            current_price DECIMAL(10, 2),
+            predicted_change DECIMAL(10, 2),
+            confidence_score INTEGER,
+            analysis_text TEXT,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(code, predict_date)
+        );
+    """)
+    conn.commit()
+
+    predict_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=200)).strftime("%Y%m%d")
+
+    for code, name in watchlist:
+        try:
+            print(f"Processing {name} ({code})...")
+            # 获取数据
+            df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date=start_date, adjust="qfq")
+            if df.empty: continue
+            
+            # --- 简单的 AI 逻辑模拟 (实际可替换为 Qlib) ---
+            # 1. 计算均线
+            df['MA5'] = df['收盘'].rolling(5).mean()
+            df['MA20'] = df['收盘'].rolling(20).mean()
+            
+            latest = df.iloc[-1]
+            price = float(latest['收盘'])
+            ma5 = float(latest['MA5'])
+            ma20 = float(latest['MA20'])
+            
+            # 2. 评分系统
+            score = 50
+            analysis = []
+            
+            if price > ma20:
+                score += 20
+                analysis.append("股价站上20日线，趋势向好")
+            else:
+                score -= 10
+                analysis.append("股价受制于20日线，趋势偏弱")
+                
+            if price > ma5:
+                score += 10
+                analysis.append("短线动能强劲")
+            
+            # 3. 量能分析
+            vol_mean = df['成交量'].tail(5).mean()
+            if latest['成交量'] > vol_mean * 1.5:
+                score += 10
+                analysis.append("近期明显放量，资金关注度高")
+            
+            score = max(0, min(100, score))
+            change_pred = (score - 50) / 10.0
+            
+            analysis_str = "。".join(analysis)
+            
+            # 存入数据库
+            cur.execute("""
+                INSERT INTO ai_predictions (code, predict_date, current_price, predicted_change, confidence_score, analysis_text)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (code, predict_date) 
+                DO UPDATE SET 
+                    current_price = EXCLUDED.current_price,
+                    predicted_change = EXCLUDED.predicted_change,
+                    confidence_score = EXCLUDED.confidence_score,
+                    analysis_text = EXCLUDED.analysis_text,
+                    created_at = NOW();
+            """, (code, predict_date, price, change_pred, int(score), analysis_str))
+            
+        except Exception as e:
+            print(f"Error {code}: {e}")
+            
+    conn.commit()
+    cur.close()
+    conn.close()
+
+if __name__ == "__main__":
+    fetch_and_predict()
+EOF
+
+# ---------------------------------------------------------
+# 3. 更新前端 UI (Page.js - V2)
+# ---------------------------------------------------------
+echo "📱 更新前端 UI: app/page.js..."
+cat <<EOF > app/page.js
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -127,7 +325,7 @@ export default function Home() {
     return Array.from({length: 30}, (_, i) => {
       price = price * (1 + (Math.random() - 0.45) * 0.05);
       return { 
-        date: `T-${30-i}`, 
+        date: \`T-\${30-i}\`, 
         price: parseFloat(price.toFixed(2)),
         ma5: parseFloat((price * 1.02).toFixed(2)) // 模拟均线
       };
@@ -138,7 +336,7 @@ export default function Home() {
     let price = current;
     return Array.from({length: 7}, (_, i) => {
       price = price * (1 + (Math.random() - 0.4) * 0.02);
-      return { day: `未来${i+1}天`, price: parseFloat(price.toFixed(2)) };
+      return { day: \`未来\${i+1}天\`, price: parseFloat(price.toFixed(2)) };
     });
   };
 
@@ -165,7 +363,7 @@ export default function Home() {
               value={query}
               onChange={e => setQuery(e.target.value)}
               onKeyDown={e => {
-                if(e.key === 'Enter' && query) addToWatchlist(query, `自选 ${query}`);
+                if(e.key === 'Enter' && query) addToWatchlist(query, \`自选 \${query}\`);
               }}
               placeholder="添加代码 (回车)"
               className="w-full bg-gray-50 border border-gray-200 rounded-xl py-2.5 pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-black/5 transition-all"
@@ -173,7 +371,7 @@ export default function Home() {
             <Search className="w-4 h-4 absolute left-3 top-3 text-gray-400" />
             {query && (
               <button 
-                onClick={() => addToWatchlist(query, `自选 ${query}`)}
+                onClick={() => addToWatchlist(query, \`自选 \${query}\`)}
                 className="absolute right-2 top-2 p-1 bg-black text-white rounded-md hover:scale-105 transition-transform"
               >
                 <Plus className="w-3 h-3" />
@@ -188,7 +386,7 @@ export default function Home() {
             <div 
               key={stock.code}
               onClick={() => handleSelectStock(stock)}
-              className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all hover:bg-gray-50 ${activeStock?.code === stock.code ? 'bg-white shadow-md border border-gray-100 ring-1 ring-black/5' : ''}`}
+              className={\`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all hover:bg-gray-50 \${activeStock?.code === stock.code ? 'bg-white shadow-md border border-gray-100 ring-1 ring-black/5' : ''}\`}
             >
               <div>
                 <div className="font-semibold text-sm">{stock.name}</div>
@@ -233,10 +431,10 @@ export default function Home() {
                 </div>
               </div>
               <div className="text-right">
-                <div className={`text-5xl font-bold tracking-tight ${colorClass}`}>
+                <div className={\`text-5xl font-bold tracking-tight \${colorClass}\`}>
                    ¥{stockData.price.toFixed(2)}
                 </div>
-                <div className={`flex items-center justify-end gap-2 text-lg font-medium ${colorClass}`}>
+                <div className={\`flex items-center justify-end gap-2 text-lg font-medium \${colorClass}\`}>
                   {isPositive ? <TrendingUp className="w-5 h-5"/> : <TrendingDown className="w-5 h-5"/>}
                   {stockData.change > 0 ? '+' : ''}{stockData.change.toFixed(2)} ({stockData.changePercent.toFixed(2)}%)
                 </div>
@@ -312,3 +510,9 @@ export default function Home() {
     </div>
   );
 }
+EOF
+
+echo "✅ V2 升级完成！请运行以下命令进行推送："
+echo "git add ."
+echo "git commit -m \"Upgrade to V2: Watchlist + DB + Realtime UI\""
+echo "git push origin main"
