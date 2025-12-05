@@ -4,8 +4,16 @@ import { NextResponse } from 'next/server';
 export async function GET() {
   let client;
   try {
-    // 1. 创建客户端实例
-    client = createClient();
+    // 检查环境变量是否存在
+    if (!process.env.POSTGRES_URL) {
+      throw new Error("POSTGRES_URL 环境变量未找到");
+    }
+
+    // 1. 创建客户端实例 (显式传递连接字符串，解决 missing_connection_string 错误)
+    client = createClient({
+      connectionString: process.env.POSTGRES_URL,
+    });
+    
     // 2. 建立连接
     await client.connect();
 
@@ -24,7 +32,7 @@ export async function GET() {
     console.error("DB Error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   } finally {
-    // 5. 务必关闭连接 (直连模式必须手动关闭)
+    // 5. 务必关闭连接
     if (client) await client.end();
   }
 }
@@ -34,7 +42,14 @@ export async function POST(request) {
   try {
     const { action, code, name } = await request.json();
     
-    client = createClient();
+    if (!process.env.POSTGRES_URL) {
+      throw new Error("POSTGRES_URL 环境变量未找到");
+    }
+
+    client = createClient({
+      connectionString: process.env.POSTGRES_URL,
+    });
+    
     await client.connect();
 
     if (action === 'add') {

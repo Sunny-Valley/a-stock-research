@@ -1,9 +1,9 @@
 #!/bin/bash
 
-echo "🔌 开始修改 API 以适配直连模式 (Direct Connection)..."
+echo "🔌 开始修改 API 以适配直连模式 (Direct Connection) - 显式传递链接版..."
 
 # 重写 app/api/watchlist/route.js
-# 使用 createClient() 替代 sql``，这样可以绕过连接池检查
+# 核心修改：createClient({ connectionString: ... }) 显式传递链接，不再依赖自动检测
 cat <<EOF > app/api/watchlist/route.js
 import { createClient } from '@vercel/postgres';
 import { NextResponse } from 'next/server';
@@ -11,8 +11,16 @@ import { NextResponse } from 'next/server';
 export async function GET() {
   let client;
   try {
-    // 1. 创建客户端实例
-    client = createClient();
+    // 检查环境变量是否存在
+    if (!process.env.POSTGRES_URL) {
+      throw new Error("POSTGRES_URL 环境变量未找到");
+    }
+
+    // 1. 创建客户端实例 (显式传递连接字符串，解决 missing_connection_string 错误)
+    client = createClient({
+      connectionString: process.env.POSTGRES_URL,
+    });
+    
     // 2. 建立连接
     await client.connect();
 
@@ -31,7 +39,7 @@ export async function GET() {
     console.error("DB Error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   } finally {
-    // 5. 务必关闭连接 (直连模式必须手动关闭)
+    // 5. 务必关闭连接
     if (client) await client.end();
   }
 }
@@ -41,7 +49,14 @@ export async function POST(request) {
   try {
     const { action, code, name } = await request.json();
     
-    client = createClient();
+    if (!process.env.POSTGRES_URL) {
+      throw new Error("POSTGRES_URL 环境变量未找到");
+    }
+
+    client = createClient({
+      connectionString: process.env.POSTGRES_URL,
+    });
+    
     await client.connect();
 
     if (action === 'add') {
@@ -62,9 +77,9 @@ export async function POST(request) {
 }
 EOF
 
-echo "✅ 代码已修改为兼容模式！"
+echo "✅ 代码已修复（显式传递连接串）！"
 echo "正在提交更新..."
 
 git add .
-git commit -m "Fix: Switch to createClient for direct DB connection"
+git commit -m "Fix: Explicitly pass connectionString to createClient"
 git push origin main
