@@ -1,3 +1,57 @@
+#!/bin/bash
+
+echo "🚑 开始修复 Vercel 500 错误和白屏问题..."
+
+# 1. 重写 API：增加详细错误日志 (以便在 Vercel 后台看到具体原因)
+echo "🔧 更新 app/api/watchlist/route.js..."
+cat <<EOF > app/api/watchlist/route.js
+import { sql } from '@vercel/postgres';
+import { NextResponse } from 'next/server';
+
+export async function GET() {
+  try {
+    // 打印环境变量检查日志
+    console.log("Checking DB connection...");
+    if (!process.env.POSTGRES_URL) {
+      throw new Error("环境变量 POSTGRES_URL 未定义！请在 Vercel Settings 中配置。");
+    }
+
+    // 尝试建表
+    await sql\`CREATE TABLE IF NOT EXISTS watchlist (
+      code VARCHAR(10) PRIMARY KEY,
+      name VARCHAR(50),
+      added_at TIMESTAMP DEFAULT NOW()
+    );\`;
+    
+    const { rows } = await sql\`SELECT * FROM watchlist ORDER BY added_at DESC\`;
+    return NextResponse.json({ data: rows });
+  } catch (error) {
+    console.error("Database Error Details:", error);
+    // 返回详细错误给前端，方便调试
+    return NextResponse.json({ error: error.message, detail: String(error) }, { status: 500 });
+  }
+}
+
+export async function POST(request) {
+  try {
+    const { action, code, name } = await request.json();
+    if (action === 'add') {
+      await sql\`INSERT INTO watchlist (code, name) VALUES (\${code}, \${name}) ON CONFLICT (code) DO NOTHING\`;
+    } else if (action === 'remove') {
+      await sql\`DELETE FROM watchlist WHERE code = \${code}\`;
+    }
+    const { rows } = await sql\`SELECT * FROM watchlist ORDER BY added_at DESC\`;
+    return NextResponse.json({ data: rows });
+  } catch (error) {
+    console.error("Database Write Error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+EOF
+
+# 2. 重写前端：增加“防弹”逻辑 (API 挂了也不白屏)
+echo "🛡️ 更新 app/page.js..."
+cat <<EOF > app/page.js
 "use client";
 
 import React, { useState, useEffect } from 'react';
@@ -22,7 +76,7 @@ export default function Home() {
       // 如果后端报错 (500)，不抛出异常，而是读取错误信息
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || `服务器错误 (${res.status})`);
+        throw new Error(errJson.error || \`服务器错误 (\${res.status})\`);
       }
       
       const json = await res.json();
@@ -103,7 +157,7 @@ export default function Home() {
               type="text" value={query} onChange={e => setQuery(e.target.value)}
               placeholder="输入代码回车"
               className="w-full bg-gray-50 border rounded-xl py-2 px-4 text-sm"
-              onKeyDown={e => e.key === 'Enter' && query && addToWatchlist(query, `自选 ${query}`)}
+              onKeyDown={e => e.key === 'Enter' && query && addToWatchlist(query, \`自选 \${query}\`)}
             />
           </div>
         </div>
@@ -139,3 +193,9 @@ export default function Home() {
     </div>
   );
 }
+EOF
+
+echo "✅ 修复完成！提交代码..."
+git add .
+git commit -m "Fix: Add robust error handling for API and UI"
+git push origin main
