@@ -1,3 +1,11 @@
+#!/bin/bash
+
+echo "🚑 开始执行终极修复 (修复卡死 + 数据库直连)..."
+
+# 1. 修复前端 (app/page.js)
+# 修复逻辑：无论数据库是否成功，都强制显示数据，绝不让页面卡在 "加载中"
+echo "🛡️ 重写 app/page.js (防卡死版)..."
+cat <<EOF > app/page.js
 "use client";
 
 import React, { useState, useEffect } from 'react';
@@ -30,7 +38,7 @@ export default function Home() {
       const res = await fetch('/api/watchlist');
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `API错误 (${res.status})`);
+        throw new Error(err.error || \`API错误 (\${res.status})\`);
       }
       const json = await res.json();
       const list = json.data || [];
@@ -43,7 +51,7 @@ export default function Home() {
         addToWatchlist('600519', '贵州茅台').catch(() => loadDemoData("数据库连接失败，显示演示数据"));
       }
     } catch (e) {
-      loadDemoData(`无法连接数据库: ${e.message}`);
+      loadDemoData(\`无法连接数据库: \${e.message}\`);
     }
   };
 
@@ -93,7 +101,7 @@ export default function Home() {
             </div>
           )}
           <div className="relative">
-            <input type="text" value={query} onChange={e => setQuery(e.target.value)} placeholder="输入代码回车" className="w-full bg-gray-50 border rounded-xl py-2 px-4 text-sm" onKeyDown={e => e.key === 'Enter' && query && addToWatchlist(query, `自选 ${query}`).catch(() => alert('添加失败'))} />
+            <input type="text" value={query} onChange={e => setQuery(e.target.value)} placeholder="输入代码回车" className="w-full bg-gray-50 border rounded-xl py-2 px-4 text-sm" onKeyDown={e => e.key === 'Enter' && query && addToWatchlist(query, \`自选 \${query}\`).catch(() => alert('添加失败'))} />
           </div>
         </div>
         <div className="flex-1 p-3">
@@ -122,3 +130,82 @@ export default function Home() {
     </div>
   );
 }
+EOF
+
+# 2. 修复后端 (app/api/watchlist/route.js)
+# 预留了手动填写的空位，解决环境变量读取不到的问题
+echo "🔌 重写 app/api/watchlist/route.js..."
+cat <<EOF > app/api/watchlist/route.js
+import { createClient } from '@vercel/postgres';
+import { NextResponse } from 'next/server';
+
+export async function GET() {
+  // ------------------------------------------------------------------
+  // 请在下面双引号内粘贴您的 postgres://... 连接串
+  // ------------------------------------------------------------------
+  const MANUAL_DB_URL = ""; 
+  
+  const dbUrl = process.env.POSTGRES_URL || MANUAL_DB_URL;
+  
+  if (!dbUrl) {
+    return NextResponse.json({ error: "missing_connection_string", detail: "请在代码中手动填入 MANUAL_DB_URL" }, { status: 500 });
+  }
+
+  const client = createClient({ connectionString: dbUrl });
+  
+  try {
+    await client.connect();
+    await client.sql\`CREATE TABLE IF NOT EXISTS watchlist (code VARCHAR(10) PRIMARY KEY, name VARCHAR(50), added_at TIMESTAMP DEFAULT NOW());\`;
+    const { rows } = await client.sql\`SELECT * FROM watchlist ORDER BY added_at DESC\`;
+    return NextResponse.json({ data: rows });
+  } catch (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  } finally {
+    await client.end();
+  }
+}
+
+export async function POST(request) {
+  const MANUAL_DB_URL = ""; // 这里也需要粘贴，或者复用上面的逻辑
+  const dbUrl = process.env.POSTGRES_URL || MANUAL_DB_URL;
+  
+  if (!dbUrl) return NextResponse.json({ error: "missing_connection_string" }, { status: 500 });
+
+  const client = createClient({ connectionString: dbUrl });
+  try {
+    const { action, code, name } = await request.json();
+    await client.connect();
+    if (action === 'add') await client.sql\`INSERT INTO watchlist (code, name) VALUES (\${code}, \${name}) ON CONFLICT (code) DO NOTHING\`;
+    else if (action === 'remove') await client.sql\`DELETE FROM watchlist WHERE code = \${code}\`;
+    const { rows } = await client.sql\`SELECT * FROM watchlist ORDER BY added_at DESC\`;
+    return NextResponse.json({ data: rows });
+  } catch (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  } finally {
+    await client.end();
+  }
+}
+EOF
+
+echo "✅ 修复脚本执行完毕！"
+```
+
+3.  在终端运行：`bash ultimate_fix.sh`
+
+---
+
+### ⚠️ 关键步骤：手动填入数据库密码
+
+脚本运行完后，请务必执行这一步，这是成功的关键：
+
+1.  在 Codespaces 左侧文件列表中，找到并打开 **`app/api/watchlist/route.js`**。
+2.  找到代码中的 **`const MANUAL_DB_URL = "";`** 这一行（有两处，分别在 GET 和 POST 函数里，大概在第 7 行和第 31 行）。
+3.  将您之前保存的以 `postgres://` 开头的长链接，粘贴到双引号中间。
+    * 例如：`const MANUAL_DB_URL = "postgres://default:xxxx@ep-xxxx.us-east-1.postgres.vercel-storage.com:5432/verceldb";`
+    * **注意：两个地方都要粘贴。**
+4.  保存文件。
+5.  在终端提交并推送：
+    ```bash
+    git add .
+    git commit -m "Fix: Hardcode DB connection"
+    git push origin main
