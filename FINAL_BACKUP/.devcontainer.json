@@ -1,0 +1,17 @@
+{
+  "name": "A-Share AI Quant Dev",
+  "image": "mcr.microsoft.com/devcontainers/python:3.9",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/node:1": {} 
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y cmake bison flex libopenmpi-dev && pip install -r requirements.txt && npm install",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "esbenp.prettier-vscode"
+      ]
+    }
+  }
+}

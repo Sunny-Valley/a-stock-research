@@ -1,0 +1,28 @@
+name: Quant Engine Daily Run
+
+on:
+  schedule:
+    - cron: '0 * * * 1-5' 
+  workflow_dispatch:
+
+jobs:
+  quant-calculation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install Dependencies
+        run: |
+          pip install pandas numpy psycopg2-binary requests
+          
+      - name: Run Quant Engine
+        env:
+          POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
+        run: |
+          python scripts/quant_engine.py
